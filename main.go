@@ -44,9 +44,9 @@ func prepare(host string, port, databaseCnt int) {
 		} else {
 			fmt.Printf("Created database %s_%d\n", DatabaseName, i)
 		}
-		_, err = db.Exec(fmt.Sprintf("SET GLOBAL tidb_ddl_version=2"))
+		_, err = db.Exec(fmt.Sprintf("SET GLOBAL tidb_enable_fast_create_table=ON"))
 		if err != nil {
-			fmt.Printf("Failed to set ddl version, %v", err)
+			fmt.Printf("Failed to set fast create table, %v", err)
 		}
 	}
 
@@ -109,7 +109,7 @@ func main() {
 		}
 		wg.Wait()
 		totalTimeDB := time.Since(startDB)
-		fmt.Printf("Created %d tables in database %s_%d, time %v\n", *tableCnt, DatabaseName, i, totalTimeDB)
+		fmt.Printf("Created %d tables in database %s_%d, time %v\n", *tableCnt * *thread, DatabaseName, i, totalTimeDB)
 		for _, conn := range dbconns {
 			conn.Close()
 		}

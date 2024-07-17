@@ -12,18 +12,17 @@ import (
 )
 
 var (
-	DatabaseName = "db"
-	TableSQL     = "CREATE TABLE `%s` (" +
-		"  `id` int(11) NOT NULL AUTO_INCREMENT," +
-		"  `k` int(11) NOT NULL DEFAULT '0'," +
-		"  `c` char(120) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''," +
-		"  `pad` char(60) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''," +
-		"  PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */," +
-		"  KEY `k_613` (`k`)" +
-		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */"
+	TableSQL = "CREATE TABLE `%s` (" +
+	"  `id` int(11) NOT NULL AUTO_INCREMENT," +
+	"  `k` int(11) NOT NULL DEFAULT '0'," +
+	"  `c` char(120) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''," +
+	"  `pad` char(60) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''," +
+	"  PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */," +
+	"  KEY `k_613` (`k`)" +
+	") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */"
 )
 
-func prepare(host string, port, databaseCnt int) {
+func prepare(host, databaseNamePrefix string, port, databaseCnt int) {
 	db, err := sql.Open("mysql", fmt.Sprintf("root@tcp(%s:%d)/", host, port))
 	if err != nil {
 		fmt.Printf("Failed to connect to MySQL database: %v\n", err)
@@ -32,27 +31,31 @@ func prepare(host string, port, databaseCnt int) {
 	defer db.Close()
 
 	for i := 0; i < databaseCnt; i++ {
-		_, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s_%d", DatabaseName, i))
+		_, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s_%d", databaseNamePrefix, i))
 		if err != nil {
-			fmt.Printf("Failed to drop database %s_%d: %v\n", DatabaseName, i, err)
+			fmt.Printf("Failed to drop database %s_%d: %v\n", databaseNamePrefix, i, err)
 		} else {
-			fmt.Printf("Dropped database %s_%d\n", DatabaseName, i)
+			fmt.Printf("Dropped database %s_%d\n", databaseNamePrefix, i)
 		}
-		_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s_%d", DatabaseName, i))
+		_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s_%d", databaseNamePrefix, i))
 		if err != nil {
-			fmt.Printf("Failed to create database %s_%d: %v\n", DatabaseName, i, err)
+			fmt.Printf("Failed to create database %s_%d: %v\n", databaseNamePrefix, i, err)
 		} else {
-			fmt.Printf("Created database %s_%d\n", DatabaseName, i)
+			fmt.Printf("Created database %s_%d\n", databaseNamePrefix, i)
 		}
-		_, err = db.Exec(fmt.Sprintf("SET GLOBAL tidb_enable_fast_create_table=ON"))
+		_, err = db.Exec("SET GLOBAL tidb_schema_cache_size=2000000000")
 		if err != nil {
-			fmt.Printf("Failed to set fast create table, %v", err)
+			fmt.Printf("Failed to tidb schema cache size, %v", err)
+		}
+		_, err = db.Exec("SET GLOBAL tidb_enable_fast_create_table=ON")
+		if err != nil {
+			fmt.Printf("Failed to tidb fast create table, %v", err)
 		}
 	}
 
 }
 
-func cleanUp(host string, port, databaseCnt int) {
+func cleanUp(host, databaseNamePrefix string, port, databaseCnt int) {
 	db, err := sql.Open("mysql", fmt.Sprintf("root@tcp(%s:%d)/", host, port))
 	if err != nil {
 		fmt.Printf("Failed to connect to MySQL database: %v\n", err)
@@ -60,11 +63,11 @@ func cleanUp(host string, port, databaseCnt int) {
 	}
 	defer db.Close()
 	for i := 0; i < databaseCnt; i++ {
-		_, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s_%d", DatabaseName, i))
+		_, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s_%d", databaseNamePrefix, i))
 		if err != nil {
-			fmt.Printf("Failed to drop database %s_%d: %v\n", DatabaseName, i, err)
+			fmt.Printf("Failed to drop database %s_%d: %v\n", databaseNamePrefix, i, err)
 		} else {
-			fmt.Printf("Dropped database %s_%d\n", DatabaseName, i)
+			fmt.Printf("Dropped database %s_%d\n", databaseNamePrefix, i)
 		}
 	}
 }
@@ -74,18 +77,23 @@ func main() {
 	port := flag.Int("port", 4000, "port")
 	thread := flag.Int("thread", 8, "thread")
 	databaseCnt := flag.Int("database", 1, "database")
+	databaseNamePrefix := flag.String("database_name_prefix", "db", "database name prefix")
+	tableNamePrefix := flag.String("table_name_prefix", "tb", "table name prefix")
 	tableCnt := flag.Int("table", 1, "table")
 	username := flag.String("username", "root", "username")
+	owner := flag.Bool("owner", true, "owner")
 
 	flag.Parse()
 	fmt.Printf("host: %s, port: %d, thread: %d, database: %d, table: %d\n", *host, *port, *thread, *databaseCnt, *tableCnt)
 
-	prepare(*host, *port, *databaseCnt)
+	if *owner {
+		prepare(*host, *databaseNamePrefix, *port, *databaseCnt)
+	}
 
 	start := time.Now()
 	for i := 0; i < *databaseCnt; i++ {
 		startDB := time.Now()
-		db, err := sql.Open("mysql", fmt.Sprintf("%s@tcp(%s:%d)/%s_%d", *username, *host, *port, DatabaseName, i))
+		db, err := sql.Open("mysql", fmt.Sprintf("%s@tcp(%s:%d)/%s_%d", *username, *host, *port, *databaseNamePrefix, i))
 		if err != nil {
 			fmt.Printf("Failed to connect to MySQL database: %v\n", err)
 			return
@@ -105,11 +113,11 @@ func main() {
 		var wg sync.WaitGroup
 		for i := 0; i < *thread; i++ {
 			wg.Add(1)
-			go createTable(dbconns[i], &wg, i, *tableCnt)
+			go createTable(dbconns[i], &wg, i, *tableCnt, *tableNamePrefix)
 		}
 		wg.Wait()
 		totalTimeDB := time.Since(startDB)
-		fmt.Printf("Created %d tables in database %s_%d, time %v\n", *tableCnt * *thread, DatabaseName, i, totalTimeDB)
+		fmt.Printf("Created %d tables in database %s_%d, time %v\n", *tableCnt**thread, *databaseNamePrefix, i, totalTimeDB)
 		for _, conn := range dbconns {
 			conn.Close()
 		}
@@ -120,9 +128,9 @@ func main() {
 	//cleanUp()
 }
 
-func createTable(db *sql.Conn, wg *sync.WaitGroup, idx int, tableCnt int) {
+func createTable(db *sql.Conn, wg *sync.WaitGroup, idx int, tableCnt int, tableNamePrefix string) {
 	for i := 0; i < tableCnt; i++ {
-		tableName := fmt.Sprintf("tb_%d_%d", idx, i)
+		tableName := fmt.Sprintf("%s_%d_%d", tableNamePrefix, idx, i)
 		tableCreateSQL := fmt.Sprintf(TableSQL, tableName)
 		_, err := db.ExecContext(context.Background(), tableCreateSQL)
 		if err != nil {
